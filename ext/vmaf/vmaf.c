@@ -62,17 +62,28 @@
 #endif
 
 #include "vmaf.h"
-
-#ifdef HAVE_RVMAF
-//#include "dssim.h"
-#endif
+#include <stdio.h>
 
 GST_DEBUG_CATEGORY_STATIC (gst_vmaf_debug);
 #define GST_CAT_DEFAULT gst_vmaf_debug
-
 #define SINK_FORMATS " { I420 } "
-
 #define SRC_FORMAT " { I420 } "
+#define DEFAULT_MODEL_PATH       "/usr/local/share/model/vmaf_v0.6.1.pkl"
+#define DEFAULT_LOG_PATH         NULL
+#define DEFAULT_LOG_FMT          JSON_LOG_FMT
+#define DEFAULT_DISABLE_CLIP     FALSE
+#define DEFAULT_DISABLE_AVX      FALSE
+#define DEFAULT_ENABLE_TRANSFORM FALSE
+#define DEFAULT_PHONE_MODEL      FALSE
+#define DEFAULT_PSNR             FALSE
+#define DEFAULT_SSIM             FALSE
+#define DEFAULT_MS_SSIM          FALSE
+#define DEFAULT_POOL_METHOD      MEAN_POOL_METHOD
+#define DEFAULT_NUM_THREADS      0
+#define DEFAULT_SUBSAMPLE        1
+#define DEFAULT_CONF_INT         FALSE
+#define GST_TYPE_VMAF_POOL_METHOD (gst_vmaf_pool_method_get_type ())
+#define GST_TYPE_VMAF_LOG_FMT (gst_vmaf_log_fmt_get_type ())
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
@@ -83,7 +94,20 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
 enum
 {
   PROP_0,
-  PROP_DO_VMAF,
+  PROP_MODEL_PATH,
+  PROP_LOG_PATH,
+  PROP_LOG_FMT,
+  PROP_DISABLE_CLIP,
+  PROP_DISABLE_AVX,
+  PROP_ENABLE_TRANSFORM,
+  PROP_PHONE_MODEL,
+  PROP_PSNR,
+  PROP_SSIM,
+  PROP_MS_SSIM,
+  PROP_POOL_METHOD,
+  PROP_NUM_THREADS,
+  PROP_SUBSAMPLE,
+  PROP_CONF_INT,
   PROP_LAST,
 };
 
@@ -93,23 +117,150 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink_%u",
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE (SINK_FORMATS))
     );
 
+static GType
+gst_vmaf_pool_method_get_type (void)
+{
+  static const GEnumValue types[] = {
+    {MIN_POOL_METHOD, "Minimum value", "min"},
+    {MEAN_POOL_METHOD, "Arithmetic mean", "mean"},
+    {HARMONIC_MEAN_POOL_METHOD, "Harmonic mean", "harmonic_mean"},
+    {0, NULL, NULL},
+  };
+  static gsize id = 0;
+
+  if (g_once_init_enter (&id)) {
+    GType _id = g_enum_register_static ("GstVmafPoolMethod", types);
+    g_once_init_leave (&id, _id);
+  }
+
+  return (GType) id;
+}
+
+static GType
+gst_vmaf_log_fmt_get_type (void)
+{
+  static const GEnumValue types[] = {
+    {JSON_LOG_FMT, "JSON format", "json"},
+    {XML_LOG_FMT, "XML format", "xml"},
+    {0, NULL, NULL},
+  };
+  static gsize id = 0;
+
+  if (g_once_init_enter (&id)) {
+    GType _id = g_enum_register_static ("GstVmafLogFmt", types);
+    g_once_init_leave (&id, _id);
+  }
+
+  return (GType) id;
+}
+
 
 /* GstVmaf */
+
+static int
+read_frame (float *ref_data, float *main_data, float *temp_data, int stride,
+    void *h)
+{
+  GstVmafPthreadHelper *helper = (GstVmafPthreadHelper *) h;
+  int ret;
+  pthread_mutex_lock (&helper->wait_frame);
+  if (!helper->no_frames) {
+    int i, j;
+    float *ref_ptr = ref_data;
+    float *main_ptr = main_data;
+    for (i = 0; i < helper->gst_vmaf_p->frame_height; i++) {
+      for (j = 0; j < helper->gst_vmaf_p->frame_width; j++) {
+        ref_ptr[j] =
+            (float) helper->original_ptr[i * helper->gst_vmaf_p->frame_width +
+            j];
+        main_ptr[j] =
+            (float) helper->distorted_ptr[i * helper->gst_vmaf_p->frame_width +
+            j];
+      }
+      ref_ptr += stride / sizeof (*ref_data);
+      main_ptr += stride / sizeof (*ref_data);
+    }
+    ret = 0;
+    helper->reading_correct = TRUE;
+    pthread_mutex_unlock (&helper->wait_frame);
+    pthread_mutex_unlock (&helper->wait_reading_complete);
+    pthread_mutex_lock (&helper->wait_checking_complete);
+  } else {
+    helper->reading_correct = FALSE;
+    ret = 2;
+  }
+  return ret;
+}
 
 #define gst_vmaf_parent_class parent_class
 G_DEFINE_TYPE (GstVmaf, gst_vmaf, GST_TYPE_VIDEO_AGGREGATOR);
 
+static void *
+vmaf_pthread_call (void *vs)
+{
+  GstVmafPthreadHelper *helper = (GstVmafPthreadHelper *) vs;
+  char *format = "yuv420p";     // or "yuv420p10le"
+
+  helper->error = compute_vmaf (&helper->score, format,
+      helper->gst_vmaf_p->frame_width,
+      helper->gst_vmaf_p->frame_height,
+      read_frame,
+      vs,
+      helper->gst_vmaf_p->model_path,
+      helper->gst_vmaf_p->log_path,
+      GstVmafLogFmtEnumNames[helper->gst_vmaf_p->log_fmt],
+      (int) helper->gst_vmaf_p->vmaf_config_disable_clip,
+      (int) helper->gst_vmaf_p->vmaf_config_disable_avx,
+      (int) helper->gst_vmaf_p->vmaf_config_enable_transform,
+      (int) helper->gst_vmaf_p->vmaf_config_phone_model,
+      (int) helper->gst_vmaf_p->vmaf_config_psnr,
+      (int) helper->gst_vmaf_p->vmaf_config_ssim,
+      (int) helper->gst_vmaf_p->vmaf_config_ms_ssim,
+      GstVmafPoolMethodNames[helper->gst_vmaf_p->pool_method],
+      helper->gst_vmaf_p->num_threads,
+      helper->gst_vmaf_p->subsample,
+      (int) helper->gst_vmaf_p->vmaf_config_conf_int);
+  printf ("VMAF: %f\n", helper->score);
+  printf ("Error: %d\n", helper->error);
+  pthread_exit (NULL);
+  return NULL;
+}
 
 static gboolean
 compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
-    GstBuffer * outbuf, GstStructure * msg_structure, gchar * padname)
+    GstBuffer * outbuf, GstStructure * msg_structure, gchar * padname,
+    guint stream_index)
 {
-
-  return TRUE;
+  gboolean result;
+  GstMapInfo ref_info;
+  GstMapInfo cmp_info;
+  //GstMapInfo out_info;
+  self->helper_struct_pointer[stream_index].reading_correct = FALSE;
+  // Run reading
+  gst_buffer_map (ref->buffer, &ref_info, GST_MAP_READ);
+  gst_buffer_map (cmp->buffer, &cmp_info, GST_MAP_READ);
+  //gst_buffer_map (outbuf, &out_info, GST_MAP_WRITE);
+  self->helper_struct_pointer[stream_index].original_ptr = ref_info.data;
+  self->helper_struct_pointer[stream_index].distorted_ptr = cmp_info.data;
+  pthread_mutex_unlock (&self->helper_struct_pointer[stream_index].wait_frame);
+  pthread_mutex_lock (&self->
+      helper_struct_pointer[stream_index].wait_reading_complete);
+  if (self->helper_struct_pointer[stream_index].reading_correct) {
+    result = TRUE;
+  } else {
+    result = FALSE;
+  }
+  gst_buffer_unmap (ref->buffer, &ref_info);
+  gst_buffer_unmap (cmp->buffer, &cmp_info);
+  //gst_buffer_unmap (outbuf, &out_info);
+  pthread_mutex_lock (&self->helper_struct_pointer[stream_index].wait_frame);
+  pthread_mutex_unlock (&self->
+      helper_struct_pointer[stream_index].wait_checking_complete);
+  return result;
 }
 
 static GstFlowReturn
-gst_iqa_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
+gst_vmaf_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
 {
   GList *l;
   GstVideoFrame *ref_frame = NULL;
@@ -117,12 +268,7 @@ gst_iqa_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
   GstStructure *msg_structure = gst_structure_new_empty ("VMAF");
   GstMessage *m = gst_message_new_element (GST_OBJECT (self), msg_structure);
   GstAggregator *agg = GST_AGGREGATOR (vagg);
-
-  //if (self->do_dssim) {
-  //  gst_structure_set (msg_structure, "dssim", GST_TYPE_STRUCTURE,
-  //      gst_structure_new_empty ("dssim"), NULL);
-  //  self->max_dssim = 0.0;
-  //}
+  guint stream_index = 0;
 
   GST_OBJECT_LOCK (vagg);
   for (l = GST_ELEMENT (vagg)->sinkpads; l; l = l->next) {
@@ -139,15 +285,15 @@ gst_iqa_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
         GstVideoFrame *cmp_frame = prepared_frame;
 
         res = compare_frames (self, ref_frame, cmp_frame, outbuf, msg_structure,
-            padname);
+            padname, stream_index);
         g_free (padname);
 
         if (!res)
           goto failed;
+        ++stream_index;
       }
     }
   }
-
   GST_OBJECT_UNLOCK (vagg);
 
   /* We only post the message here, because we can't post it while the object
@@ -165,21 +311,95 @@ failed:
 }
 
 static void
+gst_vmaf_set_log_fmt (GstVmaf * self, gint log_fmt)
+{
+  switch (log_fmt) {
+    case JSON_LOG_FMT:
+      self->log_fmt = JSON_LOG_FMT;
+      break;
+    case XML_LOG_FMT:
+      self->log_fmt = XML_LOG_FMT;
+      break;
+    default:
+      g_assert_not_reached ();
+  }
+}
+
+static void
+gst_vmaf_set_pool_method (GstVmaf * self, gint pool_method)
+{
+  switch (pool_method) {
+    case MIN_POOL_METHOD:
+      self->pool_method = MIN_POOL_METHOD;
+      break;
+    case MEAN_POOL_METHOD:
+      self->pool_method = MEAN_POOL_METHOD;
+      break;
+    case HARMONIC_MEAN_POOL_METHOD:
+      self->pool_method = HARMONIC_MEAN_POOL_METHOD;
+      break;
+    default:
+      g_assert_not_reached ();
+  }
+}
+
+static void
 _set_property (GObject * object, guint prop_id, const GValue * value,
     GParamSpec * pspec)
 {
   GstVmaf *self = GST_VMAF (object);
 
+  GST_OBJECT_LOCK (self);
   switch (prop_id) {
-    case PROP_DO_VMAF:
-      GST_OBJECT_LOCK (self);
-      self->do_vmaf = g_value_get_boolean (value);
-      GST_OBJECT_UNLOCK (self);
+    case PROP_MODEL_PATH:
+      g_free (self->model_path);
+      self->model_path = g_value_dup_string (value);
+      break;
+    case PROP_LOG_PATH:
+      g_free (self->log_path);
+      self->log_path = g_value_dup_string (value);
+      break;
+    case PROP_LOG_FMT:
+      gst_vmaf_set_log_fmt (self, g_value_get_enum (value));
+      break;
+    case PROP_DISABLE_CLIP:
+      self->vmaf_config_disable_clip = g_value_get_boolean (value);
+      break;
+    case PROP_DISABLE_AVX:
+      self->vmaf_config_disable_avx = g_value_get_boolean (value);
+      break;
+    case PROP_ENABLE_TRANSFORM:
+      self->vmaf_config_enable_transform = g_value_get_boolean (value);
+      break;
+    case PROP_PHONE_MODEL:
+      self->vmaf_config_phone_model = g_value_get_boolean (value);
+      break;
+    case PROP_PSNR:
+      self->vmaf_config_psnr = g_value_get_boolean (value);
+      break;
+    case PROP_SSIM:
+      self->vmaf_config_ssim = g_value_get_boolean (value);
+      break;
+    case PROP_MS_SSIM:
+      self->vmaf_config_ms_ssim = g_value_get_boolean (value);
+      break;
+    case PROP_POOL_METHOD:
+      gst_vmaf_set_pool_method (self, g_value_get_enum (value));
+      break;
+    case PROP_NUM_THREADS:
+      self->num_threads = g_value_get_uint (value);
+      break;
+    case PROP_SUBSAMPLE:
+      self->subsample = g_value_get_uint (value);
+      break;
+    case PROP_CONF_INT:
+      self->vmaf_config_conf_int = g_value_get_boolean (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  GST_OBJECT_UNLOCK (self);
 }
 
 static void
@@ -188,19 +408,159 @@ _get_property (GObject * object,
 {
   GstVmaf *self = GST_VMAF (object);
 
+  GST_OBJECT_LOCK (self);
   switch (prop_id) {
-    case PROP_DO_VMAF:
-      GST_OBJECT_LOCK (self);
-      g_value_set_boolean (value, self->do_vmaf);
-      GST_OBJECT_UNLOCK (self);
+    case PROP_MODEL_PATH:
+      g_value_set_string (value, self->model_path);
+      break;
+    case PROP_LOG_PATH:
+      g_value_set_string (value, self->log_path);
+      break;
+    case PROP_LOG_FMT:
+      g_value_set_enum (value, self->log_fmt);
+      break;
+    case PROP_DISABLE_CLIP:
+      g_value_set_boolean (value, self->vmaf_config_disable_clip);
+      break;
+    case PROP_DISABLE_AVX:
+      g_value_set_boolean (value, self->vmaf_config_disable_avx);
+      break;
+    case PROP_ENABLE_TRANSFORM:
+      g_value_set_boolean (value, self->vmaf_config_enable_transform);
+      break;
+    case PROP_PHONE_MODEL:
+      g_value_set_boolean (value, self->vmaf_config_phone_model);
+      break;
+    case PROP_PSNR:
+      g_value_set_boolean (value, self->vmaf_config_psnr);
+      break;
+    case PROP_SSIM:
+      g_value_set_boolean (value, self->vmaf_config_ssim);
+      break;
+    case PROP_MS_SSIM:
+      g_value_set_boolean (value, self->vmaf_config_ms_ssim);
+      break;
+    case PROP_POOL_METHOD:
+      g_value_set_enum (value, self->pool_method);
+      break;
+    case PROP_NUM_THREADS:
+      g_value_set_uint (value, self->num_threads);
+      break;
+    case PROP_SUBSAMPLE:
+      g_value_set_uint (value, self->subsample);
+      break;
+    case PROP_CONF_INT:
+      g_value_set_boolean (value, self->vmaf_config_conf_int);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
   }
+  GST_OBJECT_UNLOCK (self);
 }
 
 /* GObject boilerplate */
+
+static void
+gst_vmaf_init (GstVmaf * self)
+{
+  self->model_path = DEFAULT_MODEL_PATH;
+  self->log_path = DEFAULT_LOG_PATH;
+  gst_vmaf_set_log_fmt (self, DEFAULT_LOG_FMT);
+  self->vmaf_config_disable_clip = DEFAULT_DISABLE_CLIP;
+  self->vmaf_config_disable_avx = DEFAULT_DISABLE_AVX;
+  self->vmaf_config_enable_transform = DEFAULT_ENABLE_TRANSFORM;
+  self->vmaf_config_phone_model = DEFAULT_PHONE_MODEL;
+  self->vmaf_config_psnr = DEFAULT_PSNR;
+  self->vmaf_config_ssim = DEFAULT_SSIM;
+  self->vmaf_config_ms_ssim = DEFAULT_MS_SSIM;
+  gst_vmaf_set_pool_method (self, DEFAULT_POOL_METHOD);
+  self->num_threads = DEFAULT_NUM_THREADS;
+  self->subsample = DEFAULT_SUBSAMPLE;
+  self->vmaf_config_conf_int = DEFAULT_CONF_INT;
+}
+
+static gboolean
+vmaf_pthreads_open (GstVmaf * self)
+{
+  int thread;
+  self->number_of_vmaf_pthreads = 0;
+  for (GList * l = GST_ELEMENT (self)->sinkpads; l; l = l->next)
+    ++self->number_of_vmaf_pthreads;
+  --self->number_of_vmaf_pthreads;      // Without reference
+  self->frame_height = 1080;
+  self->frame_width = 1920;
+  self->helper_struct_pointer =
+      g_malloc (sizeof (GstVmafPthreadHelper) * self->number_of_vmaf_pthreads);
+  for (int i = 0; i < self->number_of_vmaf_pthreads; ++i) {
+    self->helper_struct_pointer[i].gst_vmaf_p = self;
+    self->helper_struct_pointer[i].no_frames = FALSE;
+    self->helper_struct_pointer[i].reading_correct = FALSE;
+    self->helper_struct_pointer[i].score = -1;
+    self->helper_struct_pointer[i].error = 2;
+    self->helper_struct_pointer[i].original_ptr = NULL;
+    self->helper_struct_pointer[i].distorted_ptr = NULL;
+    pthread_mutex_init (&self->helper_struct_pointer[i].wait_frame, NULL);
+    pthread_mutex_init (&self->helper_struct_pointer[i].wait_reading_complete,
+        NULL);
+    pthread_mutex_init (&self->helper_struct_pointer[i].wait_checking_complete,
+        NULL);
+    pthread_mutex_lock (&self->helper_struct_pointer[i].wait_frame);
+    pthread_mutex_lock (&self->helper_struct_pointer[i].wait_reading_complete);
+    pthread_mutex_lock (&self->helper_struct_pointer[i].wait_checking_complete);
+    thread = pthread_create (&(self->helper_struct_pointer[i].vmaf_thread),
+        NULL, vmaf_pthread_call, (void *) &self->helper_struct_pointer[i]);
+    if (thread) {
+      printf ("Cannot create pthread!\n");
+    }
+  }
+  return TRUE;
+}
+
+static gboolean
+vmaf_pthreads_close (GstVmaf * self)
+{
+  for (int i = 0; i < self->number_of_vmaf_pthreads; ++i) {
+    self->helper_struct_pointer[i].no_frames = TRUE;
+    pthread_mutex_unlock (&self->helper_struct_pointer[i].wait_frame);
+  }
+  for (int i = 0; i < self->number_of_vmaf_pthreads; ++i) {
+    pthread_join (self->helper_struct_pointer[i].vmaf_thread, NULL);
+  }
+  g_free (self->helper_struct_pointer);
+  return TRUE;
+}
+
+static GstStateChangeReturn
+gst_vmaf_change_state (GstElement * element, GstStateChange transition)
+{
+  GstStateChangeReturn ret;
+  switch (transition) {
+    case GST_STATE_CHANGE_NULL_TO_READY:
+      vmaf_pthreads_open (GST_VMAF (element));
+      break;
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
+      break;
+    default:
+      break;
+  }
+  ret = GST_ELEMENT_CLASS (parent_class)->change_state (element, transition);
+  switch (transition) {
+    case GST_STATE_CHANGE_PLAYING_TO_PAUSED:
+      break;
+    case GST_STATE_CHANGE_PAUSED_TO_READY:
+      break;
+    case GST_STATE_CHANGE_READY_TO_NULL:
+      vmaf_pthreads_close (GST_VMAF (element));
+      break;
+    default:
+      break;
+  }
+  return ret;
+}
+
 static void
 gst_vmaf_class_init (GstVmafClass * klass)
 {
@@ -219,21 +579,76 @@ gst_vmaf_class_init (GstVmafClass * klass)
   gobject_class->set_property = _set_property;
   gobject_class->get_property = _get_property;
 
-#ifdef HAVE_RVMAF
-  g_object_class_install_property (gobject_class, PROP_DO_VMAF,
-      g_param_spec_boolean ("do-vmaf", "do-vmaf",
-          "Run VMAF metric", FALSE, G_PARAM_READWRITE));
-#endif
+  g_object_class_install_property (gobject_class, PROP_MODEL_PATH,
+      g_param_spec_string ("model-path", "model-path",
+          "Model *.pkl filename", DEFAULT_MODEL_PATH, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_LOG_PATH,
+      g_param_spec_string ("log-path", "log-path",
+          "Results log filename", DEFAULT_LOG_PATH, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_LOG_FMT,
+      g_param_spec_enum ("log-fmt", "log-fmt",
+          "Set format for log", GST_TYPE_VMAF_LOG_FMT, DEFAULT_LOG_FMT,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_DISABLE_CLIP,
+      g_param_spec_boolean ("disable-clip", "do-dssim",
+          "Disable clipping VMAF values", DEFAULT_DISABLE_CLIP,
+          G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_DISABLE_AVX,
+      g_param_spec_boolean ("disable-avx", "disable-avx",
+          "Disable AVX intrinsics using", DEFAULT_DISABLE_AVX,
+          G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_ENABLE_TRANSFORM,
+      g_param_spec_boolean ("enable-transform", "enable-transform",
+          "Enable transform VMAF scores", DEFAULT_ENABLE_TRANSFORM,
+          G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_PHONE_MODEL,
+      g_param_spec_boolean ("phone-model", "phone-model",
+          "Use VMAF phone model", DEFAULT_PHONE_MODEL, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_PSNR,
+      g_param_spec_boolean ("psnr", "psnr",
+          "Estimate PSNR", DEFAULT_PSNR, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_SSIM,
+      g_param_spec_boolean ("ssim", "ssim",
+          "Estimate SSIM", DEFAULT_SSIM, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_MS_SSIM,
+      g_param_spec_boolean ("ms-ssim", "ms-ssim",
+          "Estimate MS-SSIM", DEFAULT_MS_SSIM, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_POOL_METHOD,
+      g_param_spec_enum ("pool-method", "pool-method",
+          "Pool method for mean", GST_TYPE_VMAF_POOL_METHOD,
+          DEFAULT_POOL_METHOD,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
+  g_object_class_install_property (gobject_class, PROP_NUM_THREADS,
+      g_param_spec_uint ("threads", "threads",
+          "The number of threads",
+          0, 32, DEFAULT_NUM_THREADS, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_SUBSAMPLE,
+      g_param_spec_uint ("subsample", "subsample",
+          "Computing on one of every N frames",
+          1, 128, DEFAULT_SUBSAMPLE, G_PARAM_READWRITE));
+
+  g_object_class_install_property (gobject_class, PROP_CONF_INT,
+      g_param_spec_boolean ("conf-interval", "conf-interval",
+          "Enable confidence intervals", DEFAULT_CONF_INT, G_PARAM_READWRITE));
+
+  gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_vmaf_change_state);
 
   gst_element_class_set_static_metadata (gstelement_class, "vmaf",
       "Filter/Analyzer/Video",
       "Provides Video Multi-Method Assessment Fusion metric",
       "Sergey Zvezdakov <szvezdakov@graphics.cs.msu.ru>");
-}
-
-static void
-gst_vmaf_init (GstVmaf * self)
-{
 }
 
 static gboolean

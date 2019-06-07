@@ -20,9 +20,11 @@
 #ifndef __GST_VMAF_H__
 #define __GST_VMAF_H__
 
+#include <pthread.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/video/gstvideoaggregator.h>
+#include "libvmaf.h"
 
 G_BEGIN_DECLS
 
@@ -39,6 +41,45 @@ G_BEGIN_DECLS
 typedef struct _GstVmaf GstVmaf;
 typedef struct _GstVmafClass GstVmafClass;
 
+typedef enum _GstVmafLogFmtEnum
+{
+  JSON_LOG_FMT = 0,
+  XML_LOG_FMT = 1,
+} GstVmafLogFmtEnum;
+
+static const char *GstVmafLogFmtEnumNames[] = {
+    "json",
+    "xml",
+    "harmonic_mean"
+};
+
+typedef enum _GstVmafPoolMethodEnum
+{
+  MIN_POOL_METHOD = 0,
+  MEAN_POOL_METHOD = 1,
+  HARMONIC_MEAN_POOL_METHOD = 2
+} GstVmafPoolMethodEnum;
+
+static const char *GstVmafPoolMethodNames[] = {
+    "min",
+    "mean",
+    "harmonic_mean"
+};
+
+typedef struct {
+  GstVmaf * gst_vmaf_p;
+  pthread_t vmaf_thread;
+  pthread_mutex_t wait_frame;
+  pthread_mutex_t wait_reading_complete;
+  pthread_mutex_t wait_checking_complete;
+  gboolean no_frames;
+  gboolean reading_correct;
+  gdouble score;
+  gint error;
+  guint8 *original_ptr;
+  guint8 *distorted_ptr;
+} GstVmafPthreadHelper;
+
 /**
  * GstVmaf:
  *
@@ -47,8 +88,27 @@ typedef struct _GstVmafClass GstVmafClass;
 struct _GstVmaf
 {
   GstVideoAggregator videoaggregator;
-
-  gboolean do_vmaf;
+  // VMAF settings from videostream
+  gint frame_height;
+  gint frame_width;
+  // VMAF settings from cmd
+  gchar * model_path;
+  gchar * log_path;
+  GstVmafLogFmtEnum log_fmt;
+  gboolean vmaf_config_disable_clip;
+  gboolean vmaf_config_disable_avx;
+  gboolean vmaf_config_enable_transform;
+  gboolean vmaf_config_phone_model;
+  gboolean vmaf_config_psnr;
+  gboolean vmaf_config_ssim;
+  gboolean vmaf_config_ms_ssim;
+  GstVmafPoolMethodEnum pool_method;
+  guint num_threads;
+  guint subsample;
+  gboolean vmaf_config_conf_int;
+  // Pthread helpers
+  GstVmafPthreadHelper * helper_struct_pointer;
+  gint number_of_vmaf_pthreads;
 };
 
 struct _GstVmafClass
