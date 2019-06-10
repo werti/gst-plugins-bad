@@ -39,31 +39,32 @@ std::string _get_file_name(const std::string& s);
 
 int RunVMAF(
   const char * fmt,
-  gint width,
-  gint height,
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
-  const char * model_path,
-  const char * log_path,
-  GstVmafLogFmtEnum log_fmt,
-  gboolean disable_clip,
-  gboolean enable_transform,
-  gboolean do_psnr,
-  gboolean do_ssim,
-  gboolean do_ms_ssim,
-  GstVmafPoolMethodEnum pool_method,
-  guint n_thread,
-  guint n_subsample,
-  gboolean enable_conf_interval,
   GstVmafPthreadHelper * pthread_helper)
 {
+  int width = pthread_helper->frame_width;
+  int height = pthread_helper->frame_height;
+  const char * model_path = pthread_helper->gst_vmaf_p->model_path;
+  const char * log_path = pthread_helper->gst_vmaf_p->log_path;
+  GstVmafPoolMethodEnum pool_method = pthread_helper->gst_vmaf_p->pool_method;
+  int n_subsample = pthread_helper->gst_vmaf_p->subsample;
+
   Result result;
   try {
     Asset asset(width, height, fmt);
     std::unique_ptr<IVmafQualityRunner> runner_ptr =
-        VmafQualityRunnerFactory::createVmafQualityRunner(model_path, enable_conf_interval);
-    result = runner_ptr->run(asset, read_frame, user_data, disable_clip,
-        enable_transform, do_psnr, do_ssim, do_ms_ssim, n_thread, n_subsample);
+        VmafQualityRunnerFactory::createVmafQualityRunner(
+        model_path, pthread_helper->gst_vmaf_p->vmaf_config_conf_int);
+    result = runner_ptr->run(asset, read_frame, user_data,
+        pthread_helper->gst_vmaf_p->vmaf_config_disable_clip,
+        (pthread_helper->gst_vmaf_p->vmaf_config_enable_transform
+          || pthread_helper->gst_vmaf_p->vmaf_config_phone_model),
+        pthread_helper->gst_vmaf_p->vmaf_config_psnr,
+        pthread_helper->gst_vmaf_p->vmaf_config_ssim,
+        pthread_helper->gst_vmaf_p->vmaf_config_ms_ssim,
+        pthread_helper->gst_vmaf_p->num_threads,
+        n_subsample);
   }
   catch (std::runtime_error& e)
   {
@@ -162,7 +163,7 @@ int RunVMAF(
       num_bootstrap_models += 1;
     }
   }
-  if (log_path != NULL && log_fmt == JSON_LOG_FMT)
+  if (log_path != NULL && pthread_helper->gst_vmaf_p->log_fmt == JSON_LOG_FMT)
   {
     size_t num_frames_subsampled = result.get_scores("vmaf").size();
     std::ofstream log_file(log_path);

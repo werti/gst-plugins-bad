@@ -168,14 +168,11 @@ read_frame (float *ref_data, float *main_data, float *temp_data, int stride,
     int i, j;
     float *ref_ptr = ref_data;
     float *main_ptr = main_data;
-    for (i = 0; i < helper->gst_vmaf_p->frame_height; i++) {
-      for (j = 0; j < helper->gst_vmaf_p->frame_width; j++) {
-        ref_ptr[j] =
-            (float) helper->original_ptr[i * helper->gst_vmaf_p->frame_width +
-            j];
+    for (i = 0; i < helper->frame_height; i++) {
+      for (j = 0; j < helper->frame_width; j++) {
+        ref_ptr[j] = (float) helper->original_ptr[i * helper->frame_width + j];
         main_ptr[j] =
-            (float) helper->distorted_ptr[i * helper->gst_vmaf_p->frame_width +
-            j];
+            (float) helper->distorted_ptr[i * helper->frame_width + j];
       }
       ref_ptr += stride / sizeof (*ref_data);
       main_ptr += stride / sizeof (*ref_data);
@@ -201,25 +198,13 @@ vmaf_pthread_call (void *vs)
   GstVmafPthreadHelper *helper = (GstVmafPthreadHelper *) vs;
   char *format = "yuv420p";     // or "yuv420p10le"
   int error;
-  error = RunVMAF (format,
-      helper->gst_vmaf_p->frame_width,
-      helper->gst_vmaf_p->frame_height,
-      read_frame,
-      vs,
-      helper->gst_vmaf_p->model_path,
-      helper->gst_vmaf_p->log_path,
-      helper->gst_vmaf_p->log_fmt, helper->gst_vmaf_p->vmaf_config_disable_clip,
-      //(int) helper->gst_vmaf_p->vmaf_config_disable_avx,
-      (helper->gst_vmaf_p->vmaf_config_enable_transform
-          || helper->gst_vmaf_p->vmaf_config_phone_model),
-      helper->gst_vmaf_p->vmaf_config_psnr,
-      helper->gst_vmaf_p->vmaf_config_ssim,
-      helper->gst_vmaf_p->vmaf_config_ms_ssim, helper->gst_vmaf_p->pool_method,
-      helper->gst_vmaf_p->num_threads, helper->gst_vmaf_p->subsample,
-      helper->gst_vmaf_p->vmaf_config_conf_int, helper);
+  pthread_cond_wait (&helper->frame_info_initialized,
+      &helper->frame_info_mutex);
+  error = RunVMAF (format, read_frame, vs, helper);
   pthread_mutex_lock (&helper->check_error);
   helper->error = error;
   pthread_mutex_unlock (&helper->check_error);
+  pthread_mutex_unlock (&helper->wait_reading_complete);
   if (helper->error)
     printf ("Error sink_%u: %d\n", helper->sink_index, helper->error);
   else
@@ -237,6 +222,15 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   GstMapInfo ref_info;
   GstMapInfo cmp_info;
   //GstMapInfo out_info;
+  if (self->helper_struct_pointer[stream_index].frame_width == 0 ||
+      self->helper_struct_pointer[stream_index].frame_height == 0) {
+    self->helper_struct_pointer[stream_index].frame_width = ref->info.width;
+    self->helper_struct_pointer[stream_index].frame_height = ref->info.height;
+    pthread_mutex_unlock (&self->
+        helper_struct_pointer[stream_index].frame_info_mutex);
+    pthread_cond_signal (&self->
+        helper_struct_pointer[stream_index].frame_info_initialized);
+  }
   // Check that pthread is waiting
   pthread_mutex_lock (&self->helper_struct_pointer[stream_index].check_error);
   if (self->helper_struct_pointer[stream_index].error)
@@ -259,10 +253,12 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   }
   gst_buffer_unmap (ref->buffer, &ref_info);
   gst_buffer_unmap (cmp->buffer, &cmp_info);
-  //gst_buffer_unmap (outbuf, &out_info);
-  pthread_mutex_lock (&self->helper_struct_pointer[stream_index].wait_frame);
-  pthread_mutex_unlock (&self->
-      helper_struct_pointer[stream_index].wait_checking_complete);
+  if (result) {
+    //gst_buffer_unmap (outbuf, &out_info);
+    pthread_mutex_lock (&self->helper_struct_pointer[stream_index].wait_frame);
+    pthread_mutex_unlock (&self->
+        helper_struct_pointer[stream_index].wait_checking_complete);
+  }
   return result;
 }
 
@@ -275,6 +271,7 @@ gst_vmaf_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
   GstStructure *msg_structure = gst_structure_new_empty ("VMAF");
   GstMessage *m = gst_message_new_element (GST_OBJECT (self), msg_structure);
   GstAggregator *agg = GST_AGGREGATOR (vagg);
+  gboolean res = TRUE;
   guint stream_index = 0;
 
   GST_OBJECT_LOCK (vagg);
@@ -287,20 +284,20 @@ gst_vmaf_aggregate_frames (GstVideoAggregator * vagg, GstBuffer * outbuf)
       if (!ref_frame) {
         ref_frame = prepared_frame;
       } else {
-        gboolean res;
         gchar *padname = gst_pad_get_name (pad);
         GstVideoFrame *cmp_frame = prepared_frame;
 
-        res = compare_frames (self, ref_frame, cmp_frame, outbuf, msg_structure,
+        res &=
+            compare_frames (self, ref_frame, cmp_frame, outbuf, msg_structure,
             padname, stream_index);
         g_free (padname);
 
-        if (!res)
-          goto failed;
         ++stream_index;
       }
     }
   }
+  if (!res)
+    goto failed;
   GST_OBJECT_UNLOCK (vagg);
 
   /* We only post the message here, because we can't post it while the object
@@ -488,15 +485,12 @@ gst_vmaf_init (GstVmaf * self)
 }
 
 static gboolean
-vmaf_pthreads_open (GstVmaf * self)
+vmaf_pthreads_open (GstElement * element)
 {
+  GstVmaf *self = GST_VMAF (element);
   guint thread;
-  self->number_of_vmaf_pthreads = 0;
-  for (GList * l = GST_ELEMENT (self)->sinkpads; l; l = l->next)
-    ++self->number_of_vmaf_pthreads;
+  self->number_of_vmaf_pthreads = g_list_length (element->sinkpads);
   --self->number_of_vmaf_pthreads;      // Without reference
-  self->frame_height = 1080;
-  self->frame_width = 1920;
   self->helper_struct_pointer =
       g_malloc (sizeof (GstVmafPthreadHelper) * self->number_of_vmaf_pthreads);
   for (guint i = 0; i < self->number_of_vmaf_pthreads; ++i) {
@@ -508,6 +502,8 @@ vmaf_pthreads_open (GstVmaf * self)
     self->helper_struct_pointer[i].original_ptr = NULL;
     self->helper_struct_pointer[i].distorted_ptr = NULL;
     self->helper_struct_pointer[i].sink_index = i;
+    self->helper_struct_pointer[i].frame_height = 0;
+    self->helper_struct_pointer[i].frame_width = 0;
     pthread_mutex_init (&self->helper_struct_pointer[i].wait_frame, NULL);
     pthread_mutex_init (&self->helper_struct_pointer[i].wait_reading_complete,
         NULL);
@@ -517,6 +513,11 @@ vmaf_pthreads_open (GstVmaf * self)
     pthread_mutex_lock (&self->helper_struct_pointer[i].wait_reading_complete);
     pthread_mutex_lock (&self->helper_struct_pointer[i].wait_checking_complete);
     pthread_mutex_init (&self->helper_struct_pointer[i].check_error, NULL);
+    pthread_mutex_init (&self->helper_struct_pointer[i].check_error, NULL);
+    pthread_cond_init (&self->helper_struct_pointer[i].frame_info_initialized,
+        NULL);
+    pthread_mutex_init (&self->helper_struct_pointer[i].frame_info_mutex, NULL);
+    pthread_mutex_lock (&self->helper_struct_pointer[i].frame_info_mutex);
     thread = pthread_create (&(self->helper_struct_pointer[i].vmaf_thread),
         NULL, vmaf_pthread_call, (void *) &self->helper_struct_pointer[i]);
     if (thread) {
@@ -546,7 +547,7 @@ gst_vmaf_change_state (GstElement * element, GstStateChange transition)
   GstStateChangeReturn ret;
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY:
-      vmaf_pthreads_open (GST_VMAF (element));
+      vmaf_pthreads_open (element);
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
       break;

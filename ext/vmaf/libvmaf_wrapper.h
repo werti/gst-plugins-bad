@@ -24,22 +24,8 @@ extern "C" {
 #endif
 int RunVMAF(
   const char* fmt,
-  gint width,
-  gint height,
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
-  const char *model_path,
-  const char * log_path,
-  GstVmafLogFmtEnum log_fmt,
-  gboolean disable_clip,
-  gboolean enable_transform,
-  gboolean do_psnr,
-  gboolean do_ssim,
-  gboolean do_ms_ssim,
-  GstVmafPoolMethodEnum pool_method,
-  guint n_thread,
-  guint n_subsample,
-  gboolean enable_conf_interval,
   GstVmafPthreadHelper * pthread_helper);
 #ifdef __cplusplus
 }

@@ -60,6 +60,8 @@ typedef struct {
   pthread_mutex_t wait_reading_complete;
   pthread_mutex_t wait_checking_complete;
   pthread_mutex_t check_error;
+  pthread_cond_t frame_info_initialized;
+  pthread_mutex_t frame_info_mutex;
   gboolean no_frames;
   gboolean reading_correct;
   gdouble score;
@@ -67,6 +69,8 @@ typedef struct {
   guint sink_index;
   guint8 *original_ptr;
   guint8 *distorted_ptr;
+  gint frame_height;
+  gint frame_width;
 } GstVmafPthreadHelper;
 
 /**
@@ -77,9 +81,6 @@ typedef struct {
 struct _GstVmaf
 {
   GstVideoAggregator videoaggregator;
-  // VMAF settings from videostream
-  gint frame_height;
-  gint frame_width;
   // VMAF settings from cmd
   gchar * model_path;
   gchar * log_path;
