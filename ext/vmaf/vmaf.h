@@ -24,7 +24,6 @@
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/video/gstvideoaggregator.h>
-#include "libvmaf.h"
 
 G_BEGIN_DECLS
 
@@ -44,14 +43,8 @@ typedef struct _GstVmafClass GstVmafClass;
 typedef enum _GstVmafLogFmtEnum
 {
   JSON_LOG_FMT = 0,
-  XML_LOG_FMT = 1,
+  //XML_LOG_FMT = 1,
 } GstVmafLogFmtEnum;
-
-static const char *GstVmafLogFmtEnumNames[] = {
-    "json",
-    "xml",
-    "harmonic_mean"
-};
 
 typedef enum _GstVmafPoolMethodEnum
 {
@@ -60,22 +53,18 @@ typedef enum _GstVmafPoolMethodEnum
   HARMONIC_MEAN_POOL_METHOD = 2
 } GstVmafPoolMethodEnum;
 
-static const char *GstVmafPoolMethodNames[] = {
-    "min",
-    "mean",
-    "harmonic_mean"
-};
-
 typedef struct {
   GstVmaf * gst_vmaf_p;
   pthread_t vmaf_thread;
   pthread_mutex_t wait_frame;
   pthread_mutex_t wait_reading_complete;
   pthread_mutex_t wait_checking_complete;
+  pthread_mutex_t check_error;
   gboolean no_frames;
   gboolean reading_correct;
   gdouble score;
-  gint error;
+  int error;
+  guint sink_index;
   guint8 *original_ptr;
   guint8 *distorted_ptr;
 } GstVmafPthreadHelper;
@@ -96,7 +85,7 @@ struct _GstVmaf
   gchar * log_path;
   GstVmafLogFmtEnum log_fmt;
   gboolean vmaf_config_disable_clip;
-  gboolean vmaf_config_disable_avx;
+  //gboolean vmaf_config_disable_avx;
   gboolean vmaf_config_enable_transform;
   gboolean vmaf_config_phone_model;
   gboolean vmaf_config_psnr;

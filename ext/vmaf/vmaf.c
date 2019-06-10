@@ -61,8 +61,8 @@
 #include "config.h"
 #endif
 
-#include "vmaf.h"
 #include <stdio.h>
+#include "libvmaf_wrapper.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_vmaf_debug);
 #define GST_CAT_DEFAULT gst_vmaf_debug
@@ -72,7 +72,7 @@ GST_DEBUG_CATEGORY_STATIC (gst_vmaf_debug);
 #define DEFAULT_LOG_PATH         NULL
 #define DEFAULT_LOG_FMT          JSON_LOG_FMT
 #define DEFAULT_DISABLE_CLIP     FALSE
-#define DEFAULT_DISABLE_AVX      FALSE
+//#define DEFAULT_DISABLE_AVX      FALSE
 #define DEFAULT_ENABLE_TRANSFORM FALSE
 #define DEFAULT_PHONE_MODEL      FALSE
 #define DEFAULT_PSNR             FALSE
@@ -98,7 +98,7 @@ enum
   PROP_LOG_PATH,
   PROP_LOG_FMT,
   PROP_DISABLE_CLIP,
-  PROP_DISABLE_AVX,
+  //PROP_DISABLE_AVX,
   PROP_ENABLE_TRANSFORM,
   PROP_PHONE_MODEL,
   PROP_PSNR,
@@ -141,7 +141,7 @@ gst_vmaf_log_fmt_get_type (void)
 {
   static const GEnumValue types[] = {
     {JSON_LOG_FMT, "JSON format", "json"},
-    {XML_LOG_FMT, "XML format", "xml"},
+    //{XML_LOG_FMT, "XML format", "xml"},
     {0, NULL, NULL},
   };
   static gsize id = 0;
@@ -200,28 +200,30 @@ vmaf_pthread_call (void *vs)
 {
   GstVmafPthreadHelper *helper = (GstVmafPthreadHelper *) vs;
   char *format = "yuv420p";     // or "yuv420p10le"
-
-  helper->error = compute_vmaf (&helper->score, format,
+  int error;
+  error = RunVMAF (format,
       helper->gst_vmaf_p->frame_width,
       helper->gst_vmaf_p->frame_height,
       read_frame,
       vs,
       helper->gst_vmaf_p->model_path,
       helper->gst_vmaf_p->log_path,
-      GstVmafLogFmtEnumNames[helper->gst_vmaf_p->log_fmt],
-      (int) helper->gst_vmaf_p->vmaf_config_disable_clip,
-      (int) helper->gst_vmaf_p->vmaf_config_disable_avx,
-      (int) helper->gst_vmaf_p->vmaf_config_enable_transform,
-      (int) helper->gst_vmaf_p->vmaf_config_phone_model,
-      (int) helper->gst_vmaf_p->vmaf_config_psnr,
-      (int) helper->gst_vmaf_p->vmaf_config_ssim,
-      (int) helper->gst_vmaf_p->vmaf_config_ms_ssim,
-      GstVmafPoolMethodNames[helper->gst_vmaf_p->pool_method],
-      helper->gst_vmaf_p->num_threads,
-      helper->gst_vmaf_p->subsample,
-      (int) helper->gst_vmaf_p->vmaf_config_conf_int);
-  printf ("VMAF: %f\n", helper->score);
-  printf ("Error: %d\n", helper->error);
+      helper->gst_vmaf_p->log_fmt, helper->gst_vmaf_p->vmaf_config_disable_clip,
+      //(int) helper->gst_vmaf_p->vmaf_config_disable_avx,
+      (helper->gst_vmaf_p->vmaf_config_enable_transform
+          || helper->gst_vmaf_p->vmaf_config_phone_model),
+      helper->gst_vmaf_p->vmaf_config_psnr,
+      helper->gst_vmaf_p->vmaf_config_ssim,
+      helper->gst_vmaf_p->vmaf_config_ms_ssim, helper->gst_vmaf_p->pool_method,
+      helper->gst_vmaf_p->num_threads, helper->gst_vmaf_p->subsample,
+      helper->gst_vmaf_p->vmaf_config_conf_int, helper);
+  pthread_mutex_lock (&helper->check_error);
+  helper->error = error;
+  pthread_mutex_unlock (&helper->check_error);
+  if (helper->error)
+    printf ("Error sink_%u: %d\n", helper->sink_index, helper->error);
+  else
+    printf ("VMAF sink_%u: %f\n", helper->sink_index, helper->score);
   pthread_exit (NULL);
   return NULL;
 }
@@ -235,6 +237,11 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   GstMapInfo ref_info;
   GstMapInfo cmp_info;
   //GstMapInfo out_info;
+  // Check that pthread is waiting
+  pthread_mutex_lock (&self->helper_struct_pointer[stream_index].check_error);
+  if (self->helper_struct_pointer[stream_index].error)
+    return FALSE;
+  pthread_mutex_unlock (&self->helper_struct_pointer[stream_index].check_error);
   self->helper_struct_pointer[stream_index].reading_correct = FALSE;
   // Run reading
   gst_buffer_map (ref->buffer, &ref_info, GST_MAP_READ);
@@ -317,8 +324,8 @@ gst_vmaf_set_log_fmt (GstVmaf * self, gint log_fmt)
     case JSON_LOG_FMT:
       self->log_fmt = JSON_LOG_FMT;
       break;
-    case XML_LOG_FMT:
-      self->log_fmt = XML_LOG_FMT;
+      //case XML_LOG_FMT:
+      //  self->log_fmt = XML_LOG_FMT;
       break;
     default:
       g_assert_not_reached ();
@@ -365,9 +372,9 @@ _set_property (GObject * object, guint prop_id, const GValue * value,
     case PROP_DISABLE_CLIP:
       self->vmaf_config_disable_clip = g_value_get_boolean (value);
       break;
-    case PROP_DISABLE_AVX:
-      self->vmaf_config_disable_avx = g_value_get_boolean (value);
-      break;
+      //case PROP_DISABLE_AVX:
+      //  self->vmaf_config_disable_avx = g_value_get_boolean (value);
+      //  break;
     case PROP_ENABLE_TRANSFORM:
       self->vmaf_config_enable_transform = g_value_get_boolean (value);
       break;
@@ -422,9 +429,9 @@ _get_property (GObject * object,
     case PROP_DISABLE_CLIP:
       g_value_set_boolean (value, self->vmaf_config_disable_clip);
       break;
-    case PROP_DISABLE_AVX:
-      g_value_set_boolean (value, self->vmaf_config_disable_avx);
-      break;
+      //case PROP_DISABLE_AVX:
+      //  g_value_set_boolean (value, self->vmaf_config_disable_avx);
+      //  break;
     case PROP_ENABLE_TRANSFORM:
       g_value_set_boolean (value, self->vmaf_config_enable_transform);
       break;
@@ -468,7 +475,7 @@ gst_vmaf_init (GstVmaf * self)
   self->log_path = DEFAULT_LOG_PATH;
   gst_vmaf_set_log_fmt (self, DEFAULT_LOG_FMT);
   self->vmaf_config_disable_clip = DEFAULT_DISABLE_CLIP;
-  self->vmaf_config_disable_avx = DEFAULT_DISABLE_AVX;
+  //self->vmaf_config_disable_avx = DEFAULT_DISABLE_AVX;
   self->vmaf_config_enable_transform = DEFAULT_ENABLE_TRANSFORM;
   self->vmaf_config_phone_model = DEFAULT_PHONE_MODEL;
   self->vmaf_config_psnr = DEFAULT_PSNR;
@@ -483,7 +490,7 @@ gst_vmaf_init (GstVmaf * self)
 static gboolean
 vmaf_pthreads_open (GstVmaf * self)
 {
-  int thread;
+  guint thread;
   self->number_of_vmaf_pthreads = 0;
   for (GList * l = GST_ELEMENT (self)->sinkpads; l; l = l->next)
     ++self->number_of_vmaf_pthreads;
@@ -492,14 +499,15 @@ vmaf_pthreads_open (GstVmaf * self)
   self->frame_width = 1920;
   self->helper_struct_pointer =
       g_malloc (sizeof (GstVmafPthreadHelper) * self->number_of_vmaf_pthreads);
-  for (int i = 0; i < self->number_of_vmaf_pthreads; ++i) {
+  for (guint i = 0; i < self->number_of_vmaf_pthreads; ++i) {
     self->helper_struct_pointer[i].gst_vmaf_p = self;
     self->helper_struct_pointer[i].no_frames = FALSE;
     self->helper_struct_pointer[i].reading_correct = FALSE;
     self->helper_struct_pointer[i].score = -1;
-    self->helper_struct_pointer[i].error = 2;
+    self->helper_struct_pointer[i].error = 0;
     self->helper_struct_pointer[i].original_ptr = NULL;
     self->helper_struct_pointer[i].distorted_ptr = NULL;
+    self->helper_struct_pointer[i].sink_index = i;
     pthread_mutex_init (&self->helper_struct_pointer[i].wait_frame, NULL);
     pthread_mutex_init (&self->helper_struct_pointer[i].wait_reading_complete,
         NULL);
@@ -508,6 +516,7 @@ vmaf_pthreads_open (GstVmaf * self)
     pthread_mutex_lock (&self->helper_struct_pointer[i].wait_frame);
     pthread_mutex_lock (&self->helper_struct_pointer[i].wait_reading_complete);
     pthread_mutex_lock (&self->helper_struct_pointer[i].wait_checking_complete);
+    pthread_mutex_init (&self->helper_struct_pointer[i].check_error, NULL);
     thread = pthread_create (&(self->helper_struct_pointer[i].vmaf_thread),
         NULL, vmaf_pthread_call, (void *) &self->helper_struct_pointer[i]);
     if (thread) {
@@ -597,10 +606,10 @@ gst_vmaf_class_init (GstVmafClass * klass)
           "Disable clipping VMAF values", DEFAULT_DISABLE_CLIP,
           G_PARAM_READWRITE));
 
-  g_object_class_install_property (gobject_class, PROP_DISABLE_AVX,
-      g_param_spec_boolean ("disable-avx", "disable-avx",
-          "Disable AVX intrinsics using", DEFAULT_DISABLE_AVX,
-          G_PARAM_READWRITE));
+  //g_object_class_install_property (gobject_class, PROP_DISABLE_AVX,
+  //    g_param_spec_boolean ("disable-avx", "disable-avx",
+  //        "Disable AVX intrinsics using", DEFAULT_DISABLE_AVX,
+  //        G_PARAM_READWRITE));
 
   g_object_class_install_property (gobject_class, PROP_ENABLE_TRANSFORM,
       g_param_spec_boolean ("enable-transform", "enable-transform",
