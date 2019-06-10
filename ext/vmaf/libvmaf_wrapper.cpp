@@ -180,7 +180,10 @@ int RunVMAF(
     log_file << "  \"metrics\":[" << std::endl;
     for (size_t j = 0; j < result_keys.size(); j++)
     {
-      log_file << "    \"" << result_keys[j] << "\"," << std::endl;
+      log_file << "    \"" << result_keys[j] << "\"";
+      if (j < result_keys.size()-1)
+        log_file << ",";
+      log_file << std::endl;
     }
     log_file << "  ]," << std::endl;
     log_file << "  \"frames\":[" << std::endl;
