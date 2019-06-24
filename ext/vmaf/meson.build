@@ -3,7 +3,8 @@ vmaf_sources = [
   'vmaf.c',
 ]
 
-libvmaf_dep = dependency('libvmaf')
+libvmaf_dep = dependency('libvmaf', required : get_option('vmaf'),
+  fallback: ['vmaf', 'libvmaf_dep'])
 
 if libvmaf_dep.found()
   gstvmaf = library('gstvmaf',
