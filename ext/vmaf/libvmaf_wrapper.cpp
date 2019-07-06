@@ -41,29 +41,29 @@ int RunVMAF(
   const char * fmt,
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
-  GstVmafPthreadHelper * pthread_helper)
+  GstVmafThreadHelper * thread_helper)
 {
-  int width = pthread_helper->frame_width;
-  int height = pthread_helper->frame_height;
-  const char * model_path = pthread_helper->gst_vmaf_p->model_path;
-  const char * log_path = pthread_helper->gst_vmaf_p->log_path;
-  GstVmafPoolMethodEnum pool_method = pthread_helper->gst_vmaf_p->pool_method;
-  int n_subsample = pthread_helper->gst_vmaf_p->subsample;
+  int width = thread_helper->frame_width;
+  int height = thread_helper->frame_height;
+  const char * model_path = thread_helper->gst_vmaf_p->model_path;
+  const char * log_path = thread_helper->gst_vmaf_p->log_path;
+  GstVmafPoolMethodEnum pool_method = thread_helper->gst_vmaf_p->pool_method;
+  int n_subsample = thread_helper->gst_vmaf_p->subsample;
 
   Result result;
   try {
     Asset asset(width, height, fmt);
     std::unique_ptr<IVmafQualityRunner> runner_ptr =
         VmafQualityRunnerFactory::createVmafQualityRunner(
-        model_path, pthread_helper->gst_vmaf_p->vmaf_config_conf_int);
+        model_path, thread_helper->gst_vmaf_p->vmaf_config_conf_int);
     result = runner_ptr->run(asset, read_frame, user_data,
-        pthread_helper->gst_vmaf_p->vmaf_config_disable_clip,
-        (pthread_helper->gst_vmaf_p->vmaf_config_enable_transform
-          || pthread_helper->gst_vmaf_p->vmaf_config_phone_model),
-        pthread_helper->gst_vmaf_p->vmaf_config_psnr,
-        pthread_helper->gst_vmaf_p->vmaf_config_ssim,
-        pthread_helper->gst_vmaf_p->vmaf_config_ms_ssim,
-        pthread_helper->gst_vmaf_p->num_threads,
+        thread_helper->gst_vmaf_p->vmaf_config_disable_clip,
+        (thread_helper->gst_vmaf_p->vmaf_config_enable_transform
+          || thread_helper->gst_vmaf_p->vmaf_config_phone_model),
+        thread_helper->gst_vmaf_p->vmaf_config_psnr,
+        thread_helper->gst_vmaf_p->vmaf_config_ssim,
+        thread_helper->gst_vmaf_p->vmaf_config_ms_ssim,
+        thread_helper->gst_vmaf_p->num_threads,
         n_subsample);
   }
   catch (std::runtime_error& e)
@@ -98,8 +98,8 @@ int RunVMAF(
       break;
   }
   double aggregate_vmaf = result.get_score("vmaf");
-  pthread_helper->score = aggregate_vmaf;
-  pthread_helper->error = 0;
+  thread_helper->score = aggregate_vmaf;
+  thread_helper->error = 0;
   std::vector<std::string> result_keys = result.get_keys();
   double aggregate_bagging = 0.0, aggregate_stddev = 0.0;
   double aggregate_ci95_low = 0.0, aggregate_ci95_high = 0.0;
@@ -163,7 +163,7 @@ int RunVMAF(
       num_bootstrap_models += 1;
     }
   }
-  if (log_path != NULL && pthread_helper->gst_vmaf_p->log_fmt == JSON_LOG_FMT)
+  if (log_path != NULL && thread_helper->gst_vmaf_p->log_fmt == JSON_LOG_FMT)
   {
     size_t num_frames_subsampled = result.get_scores("vmaf").size();
     std::ofstream log_file(log_path);

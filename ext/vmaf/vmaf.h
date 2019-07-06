@@ -20,7 +20,6 @@
 #ifndef __GST_VMAF_H__
 #define __GST_VMAF_H__
 
-#include <pthread.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/video/gstvideoaggregator.h>
@@ -55,13 +54,14 @@ typedef enum _GstVmafPoolMethodEnum
 
 typedef struct {
   GstVmaf * gst_vmaf_p;
-  pthread_t vmaf_thread;
-  pthread_mutex_t wait_frame;
-  pthread_mutex_t wait_reading_complete;
-  pthread_mutex_t wait_checking_complete;
-  pthread_mutex_t check_error;
-  pthread_cond_t frame_info_initialized;
-  pthread_mutex_t frame_info_mutex;
+  GstTask * vmaf_thread;
+  GRecMutex vmaf_thread_mutex;
+  GMutex wait_frame;
+  GMutex wait_reading_complete;
+  GMutex wait_checking_complete;
+  GMutex check_error;
+  GCond frame_info_initialized;
+  GMutex frame_info_mutex;
   gboolean no_frames;
   gboolean reading_correct;
   gdouble score;
@@ -71,7 +71,7 @@ typedef struct {
   guint8 *distorted_ptr;
   gint frame_height;
   gint frame_width;
-} GstVmafPthreadHelper;
+} GstVmafThreadHelper;
 
 /**
  * GstVmaf:
@@ -96,9 +96,9 @@ struct _GstVmaf
   guint num_threads;
   guint subsample;
   gboolean vmaf_config_conf_int;
-  // Pthread helpers
-  GstVmafPthreadHelper * helper_struct_pointer;
-  gint number_of_vmaf_pthreads;
+  // Thread helpers
+  GstVmafThreadHelper * helper_struct_pointer;
+  gint number_of_vmaf_threads;
 };
 
 struct _GstVmafClass

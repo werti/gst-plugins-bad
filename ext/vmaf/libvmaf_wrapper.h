@@ -26,7 +26,7 @@ int RunVMAF(
   const char* fmt,
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
-  GstVmafPthreadHelper * pthread_helper);
+  GstVmafThreadHelper * thread_helper);
 #ifdef __cplusplus
 }
 #endif
