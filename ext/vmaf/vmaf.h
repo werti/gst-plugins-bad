@@ -58,7 +58,6 @@ typedef struct {
   GRecMutex vmaf_thread_mutex;
   GMutex wait_frame;
   GMutex wait_reading_complete;
-  GMutex wait_checking_complete;
   GMutex check_error;
   GCond frame_info_initialized;
   GMutex frame_info_mutex;

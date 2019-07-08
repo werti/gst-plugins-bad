@@ -179,9 +179,7 @@ read_frame (float *ref_data, float *main_data, float *temp_data, int stride,
     }
     ret = 0;
     helper->reading_correct = TRUE;
-    g_mutex_unlock (&helper->wait_frame);
     g_mutex_unlock (&helper->wait_reading_complete);
-    g_mutex_lock (&helper->wait_checking_complete);
   } else {
     helper->reading_correct = FALSE;
     ret = 2;
@@ -219,12 +217,11 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   gboolean result;
   GstMapInfo ref_info;
   GstMapInfo cmp_info;
-  //GstMapInfo out_info;
+  GstMapInfo out_info;
   if (self->helper_struct_pointer[stream_index].frame_width == 0 ||
       self->helper_struct_pointer[stream_index].frame_height == 0) {
     self->helper_struct_pointer[stream_index].frame_width = ref->info.width;
     self->helper_struct_pointer[stream_index].frame_height = ref->info.height;
-    //g_mutex_unlock (&self->helper_struct_pointer[stream_index].frame_info_mutex);
     g_cond_signal (&self->
         helper_struct_pointer[stream_index].frame_info_initialized);
   }
@@ -237,25 +234,22 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   // Run reading
   gst_buffer_map (ref->buffer, &ref_info, GST_MAP_READ);
   gst_buffer_map (cmp->buffer, &cmp_info, GST_MAP_READ);
-  //gst_buffer_map (outbuf, &out_info, GST_MAP_WRITE);
+  gst_buffer_map (outbuf, &out_info, GST_MAP_WRITE);
   self->helper_struct_pointer[stream_index].original_ptr = ref_info.data;
   self->helper_struct_pointer[stream_index].distorted_ptr = cmp_info.data;
   g_mutex_unlock (&self->helper_struct_pointer[stream_index].wait_frame);
   g_mutex_lock (&self->
       helper_struct_pointer[stream_index].wait_reading_complete);
-  if (self->helper_struct_pointer[stream_index].reading_correct) {
-    result = TRUE;
-  } else {
-    result = FALSE;
+  result = self->helper_struct_pointer[stream_index].reading_correct;
+  if (result) {
+    gint i;
+    for (i = 0; i < ref_info.size; i++) {
+      out_info.data[i] = ref_info.data[i];
+    }
   }
   gst_buffer_unmap (ref->buffer, &ref_info);
   gst_buffer_unmap (cmp->buffer, &cmp_info);
-  if (result) {
-    //gst_buffer_unmap (outbuf, &out_info);
-    g_mutex_lock (&self->helper_struct_pointer[stream_index].wait_frame);
-    g_mutex_unlock (&self->
-        helper_struct_pointer[stream_index].wait_checking_complete);
-  }
+  gst_buffer_unmap (outbuf, &out_info);
   return result;
 }
 
@@ -506,10 +500,8 @@ vmaf_threads_open (GstElement * element)
     self->helper_struct_pointer[i].frame_width = 0;
     g_mutex_init (&self->helper_struct_pointer[i].wait_frame);
     g_mutex_init (&self->helper_struct_pointer[i].wait_reading_complete);
-    g_mutex_init (&self->helper_struct_pointer[i].wait_checking_complete);
     g_mutex_lock (&self->helper_struct_pointer[i].wait_frame);
     g_mutex_lock (&self->helper_struct_pointer[i].wait_reading_complete);
-    g_mutex_lock (&self->helper_struct_pointer[i].wait_checking_complete);
     g_mutex_init (&self->helper_struct_pointer[i].check_error);
     g_mutex_init (&self->helper_struct_pointer[i].check_error);
     g_cond_init (&self->helper_struct_pointer[i].frame_info_initialized);
