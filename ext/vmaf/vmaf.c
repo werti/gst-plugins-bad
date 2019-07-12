@@ -193,10 +193,19 @@ G_DEFINE_TYPE (GstVmaf, gst_vmaf, GST_TYPE_VIDEO_AGGREGATOR);
 static void
 vmaf_thread_call (void *vs)
 {
-  GstVmafThreadHelper *helper = (GstVmafThreadHelper *) vs;
-  char *format = "yuv420p";     // or "yuv420p10le"
+  GstVmafThreadHelper *helper;
+  gboolean thread_is_stopped = FALSE;
   int error;
-  g_cond_wait (&helper->frame_info_initialized, &helper->frame_info_mutex);
+  const char *format;
+  if (vs == NULL)
+    return;
+  helper = (GstVmafThreadHelper *) vs;
+  g_mutex_lock (&helper->check_error);
+  thread_is_stopped = helper->error != 0;
+  g_mutex_unlock (&helper->check_error);
+  if (thread_is_stopped)
+    return;
+  format = "yuv420p";           //  or "yuv420p10le"
   error = RunVMAF (format, read_frame, vs, helper);
   g_mutex_lock (&helper->check_error);
   helper->error = error;
@@ -207,6 +216,20 @@ vmaf_thread_call (void *vs)
   else
     printf ("VMAF sink_%u: %f\n", helper->sink_index, helper->score);
   return;
+}
+
+gboolean
+try_thread_stop (GstTask * thread)
+{
+  GstTaskState task_state;
+  gboolean result;
+  task_state = gst_task_get_state (thread);
+  if (task_state == GST_TASK_STARTED) {
+    result = gst_task_stop (thread);
+  } else {
+    result = TRUE;
+  }
+  return result;
 }
 
 static gboolean
@@ -222,13 +245,14 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
       self->helper_struct_pointer[stream_index].frame_height == 0) {
     self->helper_struct_pointer[stream_index].frame_width = ref->info.width;
     self->helper_struct_pointer[stream_index].frame_height = ref->info.height;
-    g_cond_signal (&self->
-        helper_struct_pointer[stream_index].frame_info_initialized);
+    gst_task_start (self->helper_struct_pointer[stream_index].vmaf_thread);
   }
   // Check that thread is waiting
   g_mutex_lock (&self->helper_struct_pointer[stream_index].check_error);
-  if (self->helper_struct_pointer[stream_index].error)
+  if (self->helper_struct_pointer[stream_index].error) {
+    try_thread_stop (self->helper_struct_pointer[stream_index].vmaf_thread);
     return FALSE;
+  }
   g_mutex_unlock (&self->helper_struct_pointer[stream_index].check_error);
   self->helper_struct_pointer[stream_index].reading_correct = FALSE;
   // Run reading
@@ -240,12 +264,19 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   g_mutex_unlock (&self->helper_struct_pointer[stream_index].wait_frame);
   g_mutex_lock (&self->
       helper_struct_pointer[stream_index].wait_reading_complete);
-  result = self->helper_struct_pointer[stream_index].reading_correct;
-  if (result) {
+  if (self->helper_struct_pointer[stream_index].reading_correct) {
     gint i;
+    result = TRUE;
     for (i = 0; i < ref_info.size; i++) {
       out_info.data[i] = ref_info.data[i];
     }
+  } else {
+    g_mutex_lock (&self->helper_struct_pointer[stream_index].check_error);
+    if (self->helper_struct_pointer[stream_index].error) {
+      try_thread_stop (self->helper_struct_pointer[stream_index].vmaf_thread);
+    }
+    g_mutex_unlock (&self->helper_struct_pointer[stream_index].check_error);
+    result = FALSE;
   }
   gst_buffer_unmap (ref->buffer, &ref_info);
   gst_buffer_unmap (cmp->buffer, &cmp_info);
@@ -482,7 +513,6 @@ static gboolean
 vmaf_threads_open (GstElement * element)
 {
   GstVmaf *self = GST_VMAF (element);
-  gboolean thread;
   self->number_of_vmaf_threads = g_list_length (element->sinkpads);
   --self->number_of_vmaf_threads;       // Without reference
   self->helper_struct_pointer =
@@ -504,17 +534,11 @@ vmaf_threads_open (GstElement * element)
     g_mutex_lock (&self->helper_struct_pointer[i].wait_reading_complete);
     g_mutex_init (&self->helper_struct_pointer[i].check_error);
     g_mutex_init (&self->helper_struct_pointer[i].check_error);
-    g_cond_init (&self->helper_struct_pointer[i].frame_info_initialized);
-    g_mutex_init (&self->helper_struct_pointer[i].frame_info_mutex);
-    g_mutex_lock (&self->helper_struct_pointer[i].frame_info_mutex);
+    g_rec_mutex_init (&self->helper_struct_pointer[i].vmaf_thread_mutex);
     self->helper_struct_pointer[i].vmaf_thread = gst_task_new (vmaf_thread_call,
         (void *) &self->helper_struct_pointer[i], NULL);
     gst_task_set_lock (self->helper_struct_pointer[i].vmaf_thread,
         &self->helper_struct_pointer[i].vmaf_thread_mutex);
-    thread = gst_task_start (self->helper_struct_pointer[i].vmaf_thread);
-    if (!thread) {
-      printf ("Cannot create thread!\n");
-    }
   }
   return TRUE;
 }
@@ -540,9 +564,9 @@ gst_vmaf_change_state (GstElement * element, GstStateChange transition)
   GstStateChangeReturn ret;
   switch (transition) {
     case GST_STATE_CHANGE_NULL_TO_READY:
-      vmaf_threads_open (element);
       break;
     case GST_STATE_CHANGE_READY_TO_PAUSED:
+      vmaf_threads_open (element);
       break;
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       break;

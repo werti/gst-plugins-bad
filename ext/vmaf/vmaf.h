@@ -59,8 +59,6 @@ typedef struct {
   GMutex wait_frame;
   GMutex wait_reading_complete;
   GMutex check_error;
-  GCond frame_info_initialized;
-  GMutex frame_info_mutex;
   gboolean no_frames;
   gboolean reading_correct;
   gdouble score;
@@ -106,6 +104,11 @@ struct _GstVmafClass
 };
 
 GType gst_vmaf_get_type (void);
+
+G_END_DECLS
+#endif /* __GST_VMAF_H__ */
+
+get_type (void);
 
 G_END_DECLS
 #endif /* __GST_VMAF_H__ */
