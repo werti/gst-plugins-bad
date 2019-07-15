@@ -66,8 +66,8 @@
 
 GST_DEBUG_CATEGORY_STATIC (gst_vmaf_debug);
 #define GST_CAT_DEFAULT gst_vmaf_debug
-#define SINK_FORMATS " { I420 } "
-#define SRC_FORMAT " { I420 } "
+#define SINK_FORMATS " { I420, YV12, Y41B, Y42B, Y444, I420_10LE, I422_10LE, Y444_10LE } "
+#define SRC_FORMAT " { I420, YV12, Y41B, Y42B, Y444, I420_10LE, I422_10LE, Y444_10LE } "
 #define DEFAULT_MODEL_PATH       "/usr/local/share/model/vmaf_v0.6.1.pkl"
 #define DEFAULT_LOG_PATH         NULL
 #define DEFAULT_LOG_FMT          JSON_LOG_FMT
@@ -158,8 +158,8 @@ gst_vmaf_log_fmt_get_type (void)
 /* GstVmaf */
 
 static int
-read_frame (float *ref_data, float *main_data, float *temp_data, int stride,
-    void *h)
+read_frame_8bit (float *ref_data, float *main_data, float *temp_data,
+    int stride, void *h)
 {
   GstVmafThreadHelper *helper = (GstVmafThreadHelper *) h;
   int ret;
@@ -170,9 +170,43 @@ read_frame (float *ref_data, float *main_data, float *temp_data, int stride,
     float *main_ptr = main_data;
     for (i = 0; i < helper->frame_height; i++) {
       for (j = 0; j < helper->frame_width; j++) {
-        ref_ptr[j] = (float) helper->original_ptr[i * helper->frame_width + j];
+        ref_ptr[j] =
+            (float) helper->original_ptr_8bit[i * helper->frame_width + j];
         main_ptr[j] =
-            (float) helper->distorted_ptr[i * helper->frame_width + j];
+            (float) helper->distorted_ptr_8bit[i * helper->frame_width + j];
+      }
+      ref_ptr += stride / sizeof (*ref_data);
+      main_ptr += stride / sizeof (*ref_data);
+    }
+    ret = 0;
+    helper->reading_correct = TRUE;
+    g_mutex_unlock (&helper->wait_reading_complete);
+  } else {
+    helper->reading_correct = FALSE;
+    ret = 2;
+  }
+  return ret;
+}
+
+static int
+read_frame_10bit (float *ref_data, float *main_data, float *temp_data,
+    int stride, void *h)
+{
+  GstVmafThreadHelper *helper = (GstVmafThreadHelper *) h;
+  int ret;
+  g_mutex_lock (&helper->wait_frame);
+  if (!helper->no_frames) {
+    int i, j;
+    float *ref_ptr = ref_data;
+    float *main_ptr = main_data;
+    for (i = 0; i < helper->frame_height; i++) {
+      for (j = 0; j < helper->frame_width; j++) {
+        ref_ptr[j] =
+            ((float) helper->original_ptr_10bit[i * helper->frame_width +
+                j]) / 4.0;
+        main_ptr[j] =
+            ((float) helper->distorted_ptr_10bit[i * helper->frame_width +
+                j]) / 4.0;
       }
       ref_ptr += stride / sizeof (*ref_data);
       main_ptr += stride / sizeof (*ref_data);
@@ -196,7 +230,6 @@ vmaf_thread_call (void *vs)
   GstVmafThreadHelper *helper;
   gboolean thread_is_stopped = FALSE;
   int error;
-  const char *format;
   if (vs == NULL)
     return;
   helper = (GstVmafThreadHelper *) vs;
@@ -205,8 +238,10 @@ vmaf_thread_call (void *vs)
   g_mutex_unlock (&helper->check_error);
   if (thread_is_stopped)
     return;
-  format = "yuv420p";           //  or "yuv420p10le"
-  error = RunVMAF (format, read_frame, vs, helper);
+  if (helper->y10bit)
+    error = RunVMAF (read_frame_10bit, vs, helper);
+  else
+    error = RunVMAF (read_frame_8bit, vs, helper);
   g_mutex_lock (&helper->check_error);
   helper->error = error;
   g_mutex_unlock (&helper->check_error);
@@ -243,8 +278,16 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   GstMapInfo out_info;
   if (self->helper_struct_pointer[stream_index].frame_width == 0 ||
       self->helper_struct_pointer[stream_index].frame_height == 0) {
+    GstVideoFormat video_format;
     self->helper_struct_pointer[stream_index].frame_width = ref->info.width;
     self->helper_struct_pointer[stream_index].frame_height = ref->info.height;
+    video_format = ref->info.finfo->format;
+    if (video_format == GST_VIDEO_FORMAT_I420_10LE ||
+        video_format == GST_VIDEO_FORMAT_I422_10LE ||
+        video_format == GST_VIDEO_FORMAT_Y444_10LE)
+      self->helper_struct_pointer[stream_index].y10bit = TRUE;
+    else
+      self->helper_struct_pointer[stream_index].y10bit = FALSE;
     gst_task_start (self->helper_struct_pointer[stream_index].vmaf_thread);
   }
   // Check that thread is waiting
@@ -259,8 +302,16 @@ compare_frames (GstVmaf * self, GstVideoFrame * ref, GstVideoFrame * cmp,
   gst_buffer_map (ref->buffer, &ref_info, GST_MAP_READ);
   gst_buffer_map (cmp->buffer, &cmp_info, GST_MAP_READ);
   gst_buffer_map (outbuf, &out_info, GST_MAP_WRITE);
-  self->helper_struct_pointer[stream_index].original_ptr = ref_info.data;
-  self->helper_struct_pointer[stream_index].distorted_ptr = cmp_info.data;
+  if (self->helper_struct_pointer[stream_index].y10bit) {
+    self->helper_struct_pointer[stream_index].original_ptr_10bit =
+        (guint16 *) ref_info.data;
+    self->helper_struct_pointer[stream_index].distorted_ptr_10bit =
+        (guint16 *) cmp_info.data;
+  } else {
+    self->helper_struct_pointer[stream_index].original_ptr_8bit = ref_info.data;
+    self->helper_struct_pointer[stream_index].distorted_ptr_8bit =
+        cmp_info.data;
+  }
   g_mutex_unlock (&self->helper_struct_pointer[stream_index].wait_frame);
   g_mutex_lock (&self->
       helper_struct_pointer[stream_index].wait_reading_complete);
@@ -523,11 +574,14 @@ vmaf_threads_open (GstElement * element)
     self->helper_struct_pointer[i].reading_correct = FALSE;
     self->helper_struct_pointer[i].score = -1;
     self->helper_struct_pointer[i].error = 0;
-    self->helper_struct_pointer[i].original_ptr = NULL;
-    self->helper_struct_pointer[i].distorted_ptr = NULL;
+    self->helper_struct_pointer[i].original_ptr_8bit = NULL;
+    self->helper_struct_pointer[i].distorted_ptr_8bit = NULL;
+    self->helper_struct_pointer[i].original_ptr_10bit = NULL;
+    self->helper_struct_pointer[i].distorted_ptr_10bit = NULL;
     self->helper_struct_pointer[i].sink_index = i;
     self->helper_struct_pointer[i].frame_height = 0;
     self->helper_struct_pointer[i].frame_width = 0;
+    self->helper_struct_pointer[i].y10bit = FALSE;
     g_mutex_init (&self->helper_struct_pointer[i].wait_frame);
     g_mutex_init (&self->helper_struct_pointer[i].wait_reading_complete);
     g_mutex_lock (&self->helper_struct_pointer[i].wait_frame);

@@ -23,7 +23,6 @@
 extern "C" {
 #endif
 int RunVMAF(
-  const char* fmt,
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
   GstVmafThreadHelper * thread_helper);

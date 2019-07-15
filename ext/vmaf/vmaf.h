@@ -64,10 +64,13 @@ typedef struct {
   gdouble score;
   int error;
   guint sink_index;
-  guint8 *original_ptr;
-  guint8 *distorted_ptr;
+  guint8 *original_ptr_8bit;
+  guint8 *distorted_ptr_8bit;
+  guint16 *original_ptr_10bit;
+  guint16 *distorted_ptr_10bit;
   gint frame_height;
   gint frame_width;
+  gboolean y10bit;
 } GstVmafThreadHelper;
 
 /**
@@ -107,9 +110,3 @@ GType gst_vmaf_get_type (void);
 
 G_END_DECLS
 #endif /* __GST_VMAF_H__ */
-
-get_type (void);
-
-G_END_DECLS
-#endif /* __GST_VMAF_H__ */
-

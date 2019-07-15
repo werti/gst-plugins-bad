@@ -38,7 +38,6 @@ static const std::string BOOSTRAP_VMAF_MODEL_PREFIX = "vmaf_";
 std::string _get_file_name(const std::string& s);
 
 int RunVMAF(
-  const char * fmt,
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
   GstVmafThreadHelper * thread_helper)
@@ -47,8 +46,14 @@ int RunVMAF(
   int height = thread_helper->frame_height;
   const char * model_path = thread_helper->gst_vmaf_p->model_path;
   const char * log_path = thread_helper->gst_vmaf_p->log_path;
+  const char * fmt;
   GstVmafPoolMethodEnum pool_method = thread_helper->gst_vmaf_p->pool_method;
   int n_subsample = thread_helper->gst_vmaf_p->subsample;
+
+  if (thread_helper->y10bit)
+    fmt = "yuv420p10le";
+  else
+    fmt = "yuv420p";
 
   Result result;
   try {
