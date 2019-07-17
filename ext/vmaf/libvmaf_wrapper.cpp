@@ -37,6 +37,13 @@ static const std::string BOOSTRAP_VMAF_MODEL_PREFIX = "vmaf_";
 
 std::string _get_file_name(const std::string& s);
 
+bool string_endswith(const std::string &ref_string, const std::string &check_string) {
+  if (ref_string.length() < check_string.length())
+    return false;
+  return ref_string.compare(ref_string.length() - check_string.length(), check_string.length(),
+      check_string) == 0;
+}
+
 int RunVMAF(
   int (*read_frame)(float *ref_data, float *main_data, float *temp_data, int stride, void *user_data),
   void *user_data,
@@ -171,7 +178,13 @@ int RunVMAF(
   if (log_path != NULL && thread_helper->gst_vmaf_p->log_fmt == JSON_LOG_FMT)
   {
     size_t num_frames_subsampled = result.get_scores("vmaf").size();
-    std::ofstream log_file(log_path);
+    std::string log_path_full_path(log_path);
+    if (string_endswith(log_path_full_path, std::string(".json")))
+      log_path_full_path.erase(log_path_full_path.length()-5);
+    log_path_full_path.append("-sink_");
+    log_path_full_path.append(std::to_string(thread_helper->sink_index));
+    log_path_full_path.append(".json");
+    std::ofstream log_file(log_path_full_path);
     log_file.precision(dbl::max_digits10);
     log_file << "{" << std::endl;
     log_file << "  \"params\":{" << std::endl;
