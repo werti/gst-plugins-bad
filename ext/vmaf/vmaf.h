@@ -99,6 +99,7 @@ struct _GstVmaf
   // Thread helpers
   GstVmafThreadHelper * helper_struct_pointer;
   gint number_of_vmaf_threads;
+  GMutex print_results;
 };
 
 struct _GstVmafClass

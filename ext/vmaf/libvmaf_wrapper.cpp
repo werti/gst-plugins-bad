@@ -131,22 +131,22 @@ int RunVMAF(
     aggregate_ssim = result.get_score("ssim");
   if (result.has_scores("ms_ssim"))
     aggregate_ms_ssim = result.get_score("ms_ssim");
-
-  printf("VMAF score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_vmaf);
+  g_mutex_lock (&thread_helper->gst_vmaf_p->print_results);
+  printf("Sink %d: VMAF score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_vmaf);
   if (aggregate_bagging)
-    printf("Bagging score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_bagging);
+    printf("Sink %d: Bagging score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_bagging);
   if (aggregate_stddev)
-    printf("StdDev score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_stddev);
+    printf("Sink %d: StdDev score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_stddev);
   if (aggregate_ci95_low)
-    printf("CI95_low score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_ci95_low);
+    printf("Sink %d: CI95_low score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_ci95_low);
   if (aggregate_ci95_high)
-    printf("CI95_high score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_ci95_high);
+    printf("Sink %d: CI95_high score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_ci95_high);
   if (aggregate_psnr)
-    printf("PSNR score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_psnr);
+    printf("Sink %d: PSNR score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_psnr);
   if (aggregate_ssim)
-    printf("SSIM score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_ssim);
+    printf("Sink %d: SSIM score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_ssim);
   if (aggregate_ms_ssim)
-    printf("MS-SSIM score (%s) = %f\n", VmafPoolMethodNames[pool_method], aggregate_ms_ssim);
+    printf("Sink %d: MS-SSIM score (%s) = %f\n", thread_helper->sink_index, VmafPoolMethodNames[pool_method], aggregate_ms_ssim);
 
   int num_bootstrap_models = 0;
   std::string bootstrap_model_list_str = "";
@@ -169,12 +169,14 @@ int RunVMAF(
       {
         bootstrap_model_list_str += "," + result_keys[j];
       }
-      printf("VMAF score (%s), model %d = %f\n", VmafPoolMethodNames[pool_method],
+      printf("Sink %d: VMAF score (%s), model %d = %f\n", thread_helper->sink_index,
+          VmafPoolMethodNames[pool_method],
           num_bootstrap_models + 1,
           result.get_score(result_keys[j]));
       num_bootstrap_models += 1;
     }
   }
+  g_mutex_unlock (&thread_helper->gst_vmaf_p->print_results);
   if (log_path != NULL && thread_helper->gst_vmaf_p->log_fmt == JSON_LOG_FMT)
   {
     size_t num_frames_subsampled = result.get_scores("vmaf").size();

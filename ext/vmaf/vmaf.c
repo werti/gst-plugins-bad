@@ -248,8 +248,6 @@ vmaf_thread_call (void *vs)
   g_mutex_unlock (&helper->wait_reading_complete);
   if (helper->error)
     printf ("Error sink_%u: %d\n", helper->sink_index, helper->error);
-  else
-    printf ("VMAF sink_%u: %f\n", helper->sink_index, helper->score);
   return;
 }
 
@@ -565,6 +563,7 @@ vmaf_threads_open (GstElement * element)
 {
   GstVmaf *self = GST_VMAF (element);
   self->number_of_vmaf_threads = g_list_length (element->sinkpads);
+  g_mutex_init (&self->print_results);
   --self->number_of_vmaf_threads;       // Without reference
   self->helper_struct_pointer =
       g_malloc (sizeof (GstVmafThreadHelper) * self->number_of_vmaf_threads);
@@ -586,7 +585,6 @@ vmaf_threads_open (GstElement * element)
     g_mutex_init (&self->helper_struct_pointer[i].wait_reading_complete);
     g_mutex_lock (&self->helper_struct_pointer[i].wait_frame);
     g_mutex_lock (&self->helper_struct_pointer[i].wait_reading_complete);
-    g_mutex_init (&self->helper_struct_pointer[i].check_error);
     g_mutex_init (&self->helper_struct_pointer[i].check_error);
     g_rec_mutex_init (&self->helper_struct_pointer[i].vmaf_thread_mutex);
     self->helper_struct_pointer[i].vmaf_thread = gst_task_new (vmaf_thread_call,
