@@ -104,7 +104,6 @@ option('gme', type : 'feature', value : 'auto', description : 'libgme gaming con
 option('gsm', type : 'feature', value : 'auto', description : 'GSM encoder/decoder plugin')
 option('ipcpipeline', type : 'feature', value : 'auto', description : 'Inter-process communication plugin')
 option('iqa', type : 'feature', value : 'auto', description : 'Image quality assessment plugin')
-option('vmaf', type : 'feature', value : 'auto', description : 'Video Multi-Method Assessment Fusion plugin')
 option('kate', type : 'feature', value : 'auto', description : 'Kate subtitle parser, tagger, and codec plugin')
 option('kms', type : 'feature', value : 'auto', description : 'KMS video sink plugin')
 option('ladspa', type : 'feature', value : 'auto', description : 'LADSPA plugin bridge')

@@ -1,7 +1,10 @@
 plugin_LTLIBRARIES = libgstiqa.la
 
 libgstiqa_la_SOURCES = \
-	iqa.c
+	iqaplugin.c \
+	iqa.c \
+	vmaf.c \
+	libvmaf_wrapper.cpp
 
 libgstiqa_la_CFLAGS =  \
 	-I$(top_srcdir)/gst-libs \
@@ -10,15 +13,25 @@ libgstiqa_la_CFLAGS =  \
 	$(GST_BASE_CFLAGS) $(GST_CFLAGS)
 
 libgstiqa_la_CFLAGS += $(DSSIM_CFLAGS)
+libgstiqa_la_CFLAGS += $(LIBVMAF_CFLAGS)
+
+libgstvmaf_la_CXXFLAGS =  \
+	-I$(top_srcdir)/gst-libs \
+	-I$(top_builddir)/gst-libs \
+	$(GST_PLUGINS_BASE_CFLAGS) \
+	$(GST_BASE_CFLAGS) $(GST_CFLAGS) \
+	$(LIBVMAF_CFLAGS)
 
 libgstiqa_la_LIBADD =  \
 	$(GST_PLUGINS_BASE_LIBS) -lgstvideo-@GST_API_VERSION@ \
 	$(GST_BASE_LIBS) $(GST_LIBS)
 
 libgstiqa_la_LIBADD += $(DSSIM_LIBS)
+libgstiqa_la_LIBADD += $(LIBVMAF_LIBS)
 
 libgstiqa_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 
 noinst_HEADERS = \
-	iqa.h
-
+	iqa.h \
+	vmaf.h \
+	libvmaf_wrapper.h

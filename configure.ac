@@ -352,19 +352,10 @@ AG_GST_CHECK_FEATURE(IQA, [iqa], iqa , [
   fi
   AC_SUBST(DSSIM_LIBS)
   AC_SUBST(DSSIM_CFLAGS)
-])
-AM_CONDITIONAL(HAVE_DSSIM, test "x$HAVE_DSSIM" = "xyes")
-
-AG_GST_CHECK_FEATURE(VMAF, [vmaf], vmaf , [
-  PKG_CHECK_MODULES(LIBVMAF, libvmaf, [
-    HAVE_VMAF="yes"
-  ], [
-    HAVE_VMAF="no"
-  ])
-
   AC_SUBST(LIBVMAF_LIBS)
   AC_SUBST(LIBVMAF_CFLAGS)
 ])
+AM_CONDITIONAL(HAVE_DSSIM, test "x$HAVE_DSSIM" = "xyes")
 
 dnl Orc
 ORC_CHECK([0.4.17])
@@ -2660,7 +2651,6 @@ ext/fluidsynth/Makefile
 ext/gsm/Makefile
 ext/hls/Makefile
 ext/iqa/Makefile
-ext/vmaf/Makefile
 ext/kate/Makefile
 ext/ladspa/Makefile
 ext/lv2/Makefile

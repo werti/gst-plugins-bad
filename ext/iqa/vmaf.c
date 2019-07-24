@@ -728,18 +728,5 @@ gst_vmaf_class_init (GstVmafClass * klass)
       "Filter/Analyzer/Video",
       "Provides Video Multi-Method Assessment Fusion metric",
       "Sergey Zvezdakov <szvezdakov@graphics.cs.msu.ru>");
-}
-
-static gboolean
-plugin_init (GstPlugin * plugin)
-{
   GST_DEBUG_CATEGORY_INIT (gst_vmaf_debug, "vmaf", 0, "vmaf");
-
-  return gst_element_register (plugin, "vmaf", GST_RANK_PRIMARY, GST_TYPE_VMAF);
 }
-
-GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
-    GST_VERSION_MINOR,
-    vmaf,
-    "vmaf", plugin_init, VERSION, GST_LICENSE, GST_PACKAGE_NAME,
-    GST_PACKAGE_ORIGIN)

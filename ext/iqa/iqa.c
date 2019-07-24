@@ -382,23 +382,10 @@ gst_iqa_class_init (GstIqaClass * klass)
       "Filter/Analyzer/Video",
       "Provides various Image Quality Assessment metrics",
       "Mathieu Duponchelle <mathieu.duponchelle@collabora.co.uk>");
+  GST_DEBUG_CATEGORY_INIT (gst_iqa_debug, "iqa", 0, "iqa");
 }
 
 static void
 gst_iqa_init (GstIqa * self)
 {
 }
-
-static gboolean
-plugin_init (GstPlugin * plugin)
-{
-  GST_DEBUG_CATEGORY_INIT (gst_iqa_debug, "iqa", 0, "iqa");
-
-  return gst_element_register (plugin, "iqa", GST_RANK_PRIMARY, GST_TYPE_IQA);
-}
-
-GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
-    GST_VERSION_MINOR,
-    iqa,
-    "Iqa", plugin_init, VERSION, GST_LICENSE, GST_PACKAGE_NAME,
-    GST_PACKAGE_ORIGIN)

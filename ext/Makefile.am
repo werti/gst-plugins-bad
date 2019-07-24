@@ -130,12 +130,6 @@ else
 IQA_DIR =
 endif
 
-if USE_VMAF
-VMAF_DIR = vmaf
-else
-VMAF_DIR =
-endif
-
 if USE_KATE
 KATE_DIR=kate
 else
@@ -432,7 +426,6 @@ SUBDIRS=\
 	$(GSM_DIR) \
 	$(G729_DIR) \
 	$(IQA_DIR) \
-	$(VMAF_DIR) \
 	$(KATE_DIR) \
 	$(LADSPA_DIR) \
 	$(LV2_DIR) \
@@ -498,7 +491,6 @@ DIST_SUBDIRS = \
 	gsm \
 	hls \
 	iqa \
-	vmaf \
 	ladspa \
 	kate \
 	libde265 \
